@@ -1,14 +1,15 @@
 <?php
 require '../includes/db.php';
 require '../includes/security.php';
-requireAdmin();
+requireRole(['admin', 'owner', 'manager']);
+$role = normalizeUserRole(currentUserRole());
 
 $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     requireCsrfToken('list.php');
     $name = trim($_POST['name'] ?? '');
-    $role = trim($_POST['role'] ?? '');
+    $employeeRole = $role === 'manager' ? 'cleaner' : trim($_POST['role'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     $email = trim($_POST['email'] ?? '');
 
@@ -16,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Employee name is required.';
     }
 
-    if ($role === '') {
+    if ($employeeRole === '' || ($role === 'manager' && strtolower($employeeRole) !== 'cleaner')) {
         $errors[] = 'Employee role is required.';
     }
 
@@ -30,7 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$errors) {
         $stmt = $conn->prepare('INSERT INTO employees (name, role, phone, email) VALUES (?, ?, ?, ?)');
-        $stmt->bind_param('ssss', $name, $role, $phone, $email);
+        $stmt->bind_param('ssss', $name, $employeeRole, $phone, $email);
         $stmt->execute();
         $stmt->close();
         redirect('list.php');
@@ -90,7 +91,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Role</label>
-                            <input type="text" name="role" class="form-control" required>
+                            <?php if ($role === 'manager'): ?>
+                                <input type="text" class="form-control" value="Cleaner" readonly>
+                                <input type="hidden" name="role" value="cleaner">
+                            <?php else: ?>
+                                <input type="text" name="role" class="form-control" required>
+                            <?php endif; ?>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Phone</label>

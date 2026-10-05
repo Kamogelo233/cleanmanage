@@ -20,11 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone = trim($_POST['phone'] ?? '');
     $password = $_POST['password'] ?? '';
     $confirmPassword = $_POST['confirm_password'] ?? '';
-    $role = normalizeUserRole(trim($_POST['role'] ?? 'customer'));
-
-    if (!in_array($role, allowedRoles(), true)) {
-        $errors[] = 'Please select a valid role.';
-    }
+    $role = 'customer';
 
     if ($name === '') {
         $errors[] = 'Full name is required.';
@@ -64,17 +60,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $userId = (int)$conn->insert_id;
             $stmt->close();
 
-            if ($role === 'customer') {
-                $customerStmt = $conn->prepare('INSERT INTO customers (name, phone, email) VALUES (?, ?, ?)');
-                $customerStmt->bind_param('sss', $name, $phone, $email);
-                $customerStmt->execute();
-                $customerStmt->close();
-            } else {
-                $employeeStmt = $conn->prepare('INSERT INTO employees (name, role, phone, email) VALUES (?, ?, ?, ?)');
-                $employeeStmt->bind_param('ssss', $name, $role, $phone, $email);
-                $employeeStmt->execute();
-                $employeeStmt->close();
-            }
+            $customerStmt = $conn->prepare('INSERT INTO customers (name, phone, email) VALUES (?, ?, ?)');
+            $customerStmt->bind_param('sss', $name, $phone, $email);
+            $customerStmt->execute();
+            $customerStmt->close();
 
             session_regenerate_id(true);
             $_SESSION['user_id'] = $userId;
@@ -322,17 +311,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 </svg>
                             </button>
                         </div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label" for="signup-role">Role</label>
-                        <select id="signup-role" name="role" class="form-select form-control" required>
-                            <option value="admin" <?= (($_POST['role'] ?? 'customer') === 'admin') ? 'selected' : '' ?>>Admin</option>
-                            <option value="owner" <?= (($_POST['role'] ?? 'customer') === 'owner') ? 'selected' : '' ?>>Business Owner</option>
-                            <option value="manager" <?= (($_POST['role'] ?? 'customer') === 'manager') ? 'selected' : '' ?>>Manager</option>
-                            <option value="finance" <?= (($_POST['role'] ?? 'customer') === 'finance') ? 'selected' : '' ?>>Finance</option>
-                            <option value="cleaner" <?= (($_POST['role'] ?? 'customer') === 'cleaner') ? 'selected' : '' ?>>Cleaner</option>
-                            <option value="customer" <?= (($_POST['role'] ?? 'customer') === 'customer') ? 'selected' : '' ?>>Customer</option>
-                        </select>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Password</label>

@@ -1,9 +1,10 @@
 <?php
 require '../includes/db.php';
 require '../includes/security.php';
-requireAdmin();
+requireRole(['admin', 'owner', 'manager']);
 
-$role = currentUserRole();
+$role = normalizeUserRole(currentUserRole());
+$canManageCustomers = in_array($role, ['admin', 'owner', 'manager'], true);
 
 $search = trim($_GET['search'] ?? '');
 $page = max(1, (int)($_GET['page'] ?? 1));
@@ -172,7 +173,7 @@ if ($page > $totalPages) {
                     </ol>
                 </nav>
             </div>
-            <?php if ($role === 'admin'): ?>
+            <?php if ($canManageCustomers): ?>
                 <a href="add.php" class="btn btn-primary">+ Add Customer</a>
             <?php endif; ?>
         </div>
@@ -217,7 +218,7 @@ if ($page > $totalPages) {
                                         <td><?= htmlspecialchars($row['email'] ?? '-') ?></td>
                                         <td><?= htmlspecialchars($row['address'] ?? '-') ?></td>
                                         <td class="text-end">
-                                            <?php if ($role === 'admin'): ?>
+                                            <?php if ($canManageCustomers): ?>
                                                 <a class="btn btn-sm btn-outline-primary" href="edit.php?id=<?= $row['id'] ?>">Edit</a>
                                             <?php else: ?>
                                                 <span class="text-muted small">Read only</span>

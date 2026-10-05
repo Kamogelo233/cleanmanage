@@ -56,9 +56,23 @@ function loadEnvFile(string $path): array
 }
 
 $envValues = loadEnvFile($envPath);
+$configEnvironmentKeys = [
+    'APP_URL',
+    'SMTP_ENABLED', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_ENCRYPTION', 'SMTP_USERNAME', 'SMTP_PASSWORD', 'SMTP_FROM_EMAIL', 'SMTP_FROM_NAME',
+    'WHATSAPP_ENABLED', 'WHATSAPP_API_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_API_URL'
+];
+foreach ($configEnvironmentKeys as $environmentKey) {
+    $processValue = getenv($environmentKey);
+    if ($processValue !== false) {
+        $envValues[$environmentKey] = (string)$processValue;
+    }
+}
+
 foreach ($envValues as $key => $value) {
     $key = strtoupper($key);
-    if ($key === 'SMTP_ENABLED') {
+    if ($key === 'APP_URL') {
+        $config['site_url'] = $value;
+    } elseif ($key === 'SMTP_ENABLED') {
         $config['smtp']['enabled'] = filter_var($value, FILTER_VALIDATE_BOOLEAN);
     } elseif ($key === 'SMTP_HOST') {
         $config['smtp']['host'] = $value;

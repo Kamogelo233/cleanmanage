@@ -1,7 +1,7 @@
 <?php
 require '../includes/db.php';
 require '../includes/security.php';
-requireAdmin();
+requireRole(['admin', 'owner', 'manager']);
 
 $id = (int)($_GET['id'] ?? 0);
 $errors = [];

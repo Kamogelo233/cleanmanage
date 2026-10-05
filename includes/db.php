@@ -1,30 +1,62 @@
 <?php
+require_once __DIR__ . '/config.php';
+$runtimeEnv = $envValues ?? loadEnvFile(__DIR__ . '/../.env');
+$getRuntimeValue = static function (string $key, string $default = '') use ($runtimeEnv): string {
+    $processValue = getenv($key);
+    if ($processValue !== false) {
+        return (string)$processValue;
+    }
+    return (string)($runtimeEnv[$key] ?? $default);
+};
+
+$appEnvironment = strtolower($getRuntimeValue('APP_ENV', 'local'));
+$appUrl = $getRuntimeValue('APP_URL', 'http://localhost:8000');
+$host = $getRuntimeValue('DB_HOST', 'localhost');
+$user = $getRuntimeValue('DB_USER', 'root');
+$pass = $getRuntimeValue('DB_PASS');
+$dbname = $getRuntimeValue('DB_NAME', 'cleanmanage_db');
+$appUrlHost = strtolower((string)(parse_url($appUrl, PHP_URL_HOST) ?: ''));
+$isLocalRuntime = in_array(strtolower($host), ['localhost', '127.0.0.1', '::1'], true)
+    && in_array($appUrlHost, ['localhost', '127.0.0.1', '::1'], true);
+
+if (!preg_match('/^[A-Za-z0-9_]+$/', $dbname)) {
+    die('Invalid database name configuration.');
+}
+
+if ($appEnvironment === 'production' && !$isLocalRuntime && ($user === 'root' || $pass === '')) {
+    die('Production requires a dedicated database user and a non-empty database password.');
+}
+
 if (session_status() === PHP_SESSION_NONE) {
     ini_set('session.use_strict_mode', '1');
     ini_set('session.cookie_httponly', '1');
-    ini_set('session.cookie_samesite', 'Lax');
+    $sameSite = $getRuntimeValue('SESSION_SAME_SITE', 'Lax');
+    if (!in_array($sameSite, ['Lax', 'Strict', 'None'], true)) {
+        $sameSite = 'Lax';
+    }
+    $secureCookie = filter_var($getRuntimeValue('SESSION_SECURE', (string)(parse_url($appUrl, PHP_URL_SCHEME) === 'https')), FILTER_VALIDATE_BOOLEAN);
+    ini_set('session.cookie_samesite', $sameSite);
     session_set_cookie_params([
         'lifetime' => 0,
         'path' => '/',
         'domain' => '',
-        'secure' => false,
+        'secure' => $secureCookie,
         'httponly' => true,
-        'samesite' => 'Lax'
+        'samesite' => $sameSite
     ]);
     session_start();
 }
 
-$host = 'localhost';
-$user = 'root';
-$pass = '';
-$dbname = 'cleanmanage_db';
-
 $conn = new mysqli($host, $user, $pass, $dbname);
 
 if ($conn->connect_error) {
+    if (!$isLocalRuntime) {
+        die('Database connection failed. Check the configured database host, name, and credentials.');
+    }
+
     $fallback = new mysqli($host, $user, $pass);
     if ($fallback->connect_error) {
-        die('Database connection failed: ' . $fallback->connect_error);
+        die('Local database connection failed: ' . $fallback->connect_error);
     }
 
     $fallback->query("CREATE DATABASE IF NOT EXISTS `$dbname`");
@@ -62,12 +94,33 @@ $schemaQueries = [
         email VARCHAR(100) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )",
+    "CREATE TABLE IF NOT EXISTS attendance_records (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        employee_id INT NOT NULL,
+        attendance_date DATE NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        notes VARCHAR(500) DEFAULT NULL,
+        marked_by INT DEFAULT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_attendance_employee_date (employee_id, attendance_date),
+        CONSTRAINT fk_attendance_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+    )",
+    "CREATE TABLE IF NOT EXISTS inventory_items (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        item_name VARCHAR(120) NOT NULL UNIQUE,
+        quantity DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        unit VARCHAR(30) NOT NULL DEFAULT 'units',
+        reorder_level DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        updated_by INT DEFAULT NULL
+    )",
     "CREATE TABLE IF NOT EXISTS bookings (
         id INT AUTO_INCREMENT PRIMARY KEY,
         customer_id INT NOT NULL,
         employee_id VARCHAR(255) DEFAULT NULL,
         service_id INT DEFAULT NULL,
         service_type VARCHAR(100) NOT NULL DEFAULT 'Cleaning Service',
+        service_price DECIMAL(10,2) DEFAULT NULL,
         scheduled_date DATE DEFAULT NULL,
         status VARCHAR(30) NOT NULL DEFAULT 'pending',
         notes TEXT DEFAULT NULL,
@@ -141,6 +194,13 @@ if (!in_array('service_id', $bookingColumns, true)) {
 
 if (!in_array('service_type', $bookingColumns, true)) {
     $conn->query("ALTER TABLE bookings ADD COLUMN service_type VARCHAR(100) NOT NULL DEFAULT 'Cleaning Service' AFTER service_id");
+    $bookingColumns[] = 'service_type';
+}
+
+if (!in_array('service_price', $bookingColumns, true)) {
+    $conn->query('ALTER TABLE bookings ADD COLUMN service_price DECIMAL(10,2) DEFAULT NULL AFTER service_type');
+    $conn->query('UPDATE bookings b LEFT JOIN services s ON s.id = b.service_id SET b.service_price = COALESCE(s.price, (SELECT legacy_service.price FROM services legacy_service WHERE legacy_service.service_name = b.service_type LIMIT 1), 0) WHERE b.service_price IS NULL');
+    $bookingColumns[] = 'service_price';
 }
 
 if (!in_array('proof_photo', $bookingColumns, true)) {
@@ -248,9 +308,6 @@ if ($constraintCheck && $constraintCheck->num_rows === 0) {
     $conn->query('ALTER TABLE bookings ADD CONSTRAINT fk_bookings_service FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE SET NULL');
 }
 
-require_once __DIR__ . '/config.php';
-$appEnvironmentValues = loadEnvFile(__DIR__ . '/../.env');
-$appEnvironment = strtolower(trim($appEnvironmentValues['APP_ENV'] ?? (getenv('APP_ENV') ?: 'local')));
 $seedUsers = $appEnvironment === 'production' ? [] : [
     ['System Administrator', 'admin@cleanmanage.com', 'Admin@2026!', 'admin'],
     ['Business Owner', 'owner@cleanmanage.com', 'Owner@2026!', 'owner'],

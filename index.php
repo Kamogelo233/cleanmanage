@@ -1,7 +1,10 @@
 <?php
 require 'includes/db.php';
 require 'includes/security.php';
-requireAuth();
+if (!isAuthenticated()) {
+    require __DIR__ . '/landing.php';
+    exit;
+}
 
 $role = normalizeUserRole(currentUserRole());
 $currentUserEmail = trim($_SESSION['user_email'] ?? '');
@@ -28,6 +31,7 @@ $customersCount = (int)$conn->query('SELECT COUNT(*) AS total FROM customers')->
 $employeesCount = (int)$conn->query('SELECT COUNT(*) AS total FROM employees')->fetch_assoc()['total'];
 $bookingsCount = (int)$conn->query('SELECT COUNT(*) AS total FROM bookings')->fetch_assoc()['total'];
 $paymentsCount = (int)$conn->query('SELECT COUNT(*) AS total FROM payments')->fetch_assoc()['total'];
+$pendingPaymentsCount = (int)$conn->query('SELECT COUNT(*) AS total FROM payments WHERE status = "pending"')->fetch_assoc()['total'];
 $revenue = (float)$conn->query('SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE status = "paid"')->fetch_assoc()['total'];
 $pendingPayments = (float)$conn->query('SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE status = "pending"')->fetch_assoc()['total'];
 $completedBookings = (int)$conn->query('SELECT COUNT(*) AS total FROM bookings WHERE status = "completed"')->fetch_assoc()['total'];
@@ -96,6 +100,20 @@ while ($row = $statusResult->fetch_assoc()) {
     }
 }
 
+$managerPendingBookings = 0;
+$managerUnassignedBookings = 0;
+$managerOverdueBookings = 0;
+$managerFeedbackCount = 0;
+$managerAverageRating = 0.0;
+if ($isManager) {
+    $managerPendingBookings = (int)$conn->query("SELECT COUNT(*) AS total FROM bookings WHERE status = 'pending'")->fetch_assoc()['total'];
+    $managerUnassignedBookings = (int)$conn->query("SELECT COUNT(*) AS total FROM bookings WHERE status IN ('pending', 'assigned', 'in_progress') AND (employee_id IS NULL OR employee_id = '')")->fetch_assoc()['total'];
+    $managerOverdueBookings = (int)$conn->query("SELECT COUNT(*) AS total FROM bookings WHERE scheduled_date < CURDATE() AND status IN ('pending', 'assigned', 'in_progress')")->fetch_assoc()['total'];
+    $feedbackSummary = $conn->query('SELECT COUNT(*) AS total, COALESCE(AVG(feedback_rating), 0) AS average_rating FROM bookings WHERE feedback_rating IS NOT NULL OR feedback_comment IS NOT NULL')->fetch_assoc();
+    $managerFeedbackCount = (int)($feedbackSummary['total'] ?? 0);
+    $managerAverageRating = (float)($feedbackSummary['average_rating'] ?? 0);
+}
+
 $revenueLabels = [];
 $revenueData = [];
 foreach ($monthlyRevenue as $entry) {
@@ -103,11 +121,6 @@ foreach ($monthlyRevenue as $entry) {
     $revenueData[] = $entry['total'];
 }
 
-$servicesOffered = [];
-$servicesStmt = $conn->query('SELECT service_name, price, duration_hours, required_staff_count FROM services ORDER BY price ASC');
-if ($servicesStmt) {
-    $servicesOffered = $servicesStmt->fetch_all(MYSQLI_ASSOC);
-}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -473,41 +486,6 @@ if ($servicesStmt) {
             </div>
         </div>
 
-        <div class="row g-4 mb-4">
-            <div class="col-12">
-                <div class="panel-card">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <div>
-                            <div class="eyebrow mb-1">Our service menu</div>
-                            <h2 class="card-title mb-0">Service Portfolio</h2>
-                        </div>
-                    </div>
-
-                    <div class="row g-3">
-                        <?php foreach ($servicesOffered as $service): ?>
-                            <div class="col-md-6 col-xl-4">
-                                <div class="stat-card h-100">
-                                    <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
-                                        <div>
-                                            <p class="stat-label mb-1">Service</p>
-                                            <h5 class="mb-0 fw-bold"><?= htmlspecialchars($service['service_name']) ?></h5>
-                                        </div>
-                                        <div class="icon-box" style="background: rgba(197,168,128,0.12);">🧼</div>
-                                    </div>
-                                    <div class="metric-value" style="font-size:1.45rem;">
-                                        R <?= number_format((float)$service['price'], 2) ?>
-                                    </div>
-                                    <div class="metric-trend mt-2">
-                                        <?= htmlspecialchars((string)$service['duration_hours']) ?> hrs · <?= (int)$service['required_staff_count'] ?> staff
-                                    </div>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <?php if ($isAdmin): ?>
         <div class="row g-4 mb-4">
             <div class="col-md-6 col-xl-3">
@@ -688,42 +666,59 @@ if ($servicesStmt) {
             </div>
         </div>
         <?php elseif ($isManager): ?>
+        <div class="mb-4">
+            <div class="eyebrow mb-1">Manager workspace</div>
+            <h2 class="h3 fw-bold mb-1">Operations Dashboard</h2>
+            <p class="subtle mb-0">Coordinate people, schedules, client requests and service delivery.</p>
+        </div>
+
+        <div class="row g-3 mb-4">
+            <div class="col-md-6 col-xl-3"><a class="text-decoration-none" href="bookings/list.php"><div class="stat-card h-100"><p class="stat-label">Open workload</p><p class="metric-value"><?= $statusCounts['pending'] + $statusCounts['assigned'] + $statusCounts['in_progress'] ?></p><div class="metric-trend">Bookings in progress</div></div></a></div>
+            <div class="col-md-6 col-xl-3"><a class="text-decoration-none" href="bookings/list.php"><div class="stat-card h-100"><p class="stat-label">Awaiting approval</p><p class="metric-value"><?= $managerPendingBookings ?></p><div class="metric-trend">Pending requests</div></div></a></div>
+            <div class="col-md-6 col-xl-3"><a class="text-decoration-none" href="bookings/list.php"><div class="stat-card h-100"><p class="stat-label">Unassigned</p><p class="metric-value"><?= $managerUnassignedBookings ?></p><div class="metric-trend">Need cleaner assignment</div></div></a></div>
+            <div class="col-md-6 col-xl-3"><a class="text-decoration-none" href="bookings/list.php"><div class="stat-card h-100"><p class="stat-label">Past due</p><p class="metric-value"><?= $managerOverdueBookings ?></p><div class="metric-trend">Open jobs past schedule</div></div></a></div>
+        </div>
+
         <div class="row g-4 mb-4">
-            <div class="col-md-4">
-                <div class="stat-card h-100">
-                    <div class="stat-header">
-                        <div>
-                            <p class="stat-label">Open bookings</p>
-                        </div>
-                        <div class="icon-box" style="background: rgba(245,158,11,0.12);">📌</div>
+            <div class="col-lg-7">
+                <div class="panel-card h-100">
+                    <div class="eyebrow mb-1">Daily operations</div>
+                    <h2 class="card-title mb-3">Manager actions</h2>
+                    <div class="quick-access-grid">
+                        <a href="employees/list.php" class="quick-action"><div><strong>Manage employees</strong><span class="small">Review staff and cleaner details</span></div><div class="quick-action-badge">01</div></a>
+                        <a href="bookings/calendar.php" class="quick-action"><div><strong>Work schedules</strong><span class="small">View the annual schedule and daily jobs</span></div><div class="quick-action-badge">02</div></a>
+                        <a href="bookings/list.php" class="quick-action"><div><strong>Approve and assign bookings</strong><span class="small">Update status and assign cleaners</span></div><div class="quick-action-badge">03</div></a>
+                        <a href="customers/list.php" class="quick-action"><div><strong>Manage clients</strong><span class="small">Review customer contact records</span></div><div class="quick-action-badge">04</div></a>
+                        <a href="bookings/feedback.php" class="quick-action"><div><strong>Service quality and feedback</strong><span class="small"><?= $managerFeedbackCount ?> feedback entries<?php if ($managerFeedbackCount > 0): ?> · average <?= number_format($managerAverageRating, 1) ?>/5<?php endif; ?></span></div><div class="quick-action-badge">05</div></a>
+                        <a href="bookings/add.php" class="quick-action"><div><strong>Create a booking</strong><span class="small">Register a customer service request</span></div><div class="quick-action-badge">06</div></a>
+                        <a href="manager/operations.php#attendance" class="quick-action"><div><strong>Attendance and performance</strong><span class="small">Record cleaner attendance and review job completion</span></div><div class="quick-action-badge">07</div></a>
+                        <a href="manager/operations.php#inventory" class="quick-action"><div><strong>Materials and equipment</strong><span class="small">Track stock and reorder thresholds</span></div><div class="quick-action-badge">08</div></a>
+                        <a href="manager/operations.php#services" class="quick-action"><div><strong>Services and pricing</strong><span class="small">Update rates, duration and cleaner requirements</span></div><div class="quick-action-badge">09</div></a>
+                        <a href="finance/index.php" class="quick-action"><div><strong>Financial reports</strong><span class="small">View revenue and payment summaries</span></div><div class="quick-action-badge">10</div></a>
                     </div>
-                    <p class="metric-value"><?= $statusCounts['pending'] + $statusCounts['assigned'] + $statusCounts['in_progress'] ?></p>
-                    <div class="metric-trend">Active workload</div>
                 </div>
             </div>
-            <div class="col-md-4">
-                <div class="stat-card h-100">
-                    <div class="stat-header">
-                        <div>
-                            <p class="stat-label">Teams</p>
-                        </div>
-                        <div class="icon-box" style="background: rgba(13,110,253,0.10);">👨‍🔧</div>
-                    </div>
-                    <p class="metric-value"><?= $employeesCount ?></p>
-                    <div class="metric-trend">Staff available</div>
+            <div class="col-lg-5">
+                <div class="panel-card h-100">
+                    <div class="eyebrow mb-1">Operational performance</div>
+                    <h2 class="card-title mb-3">Service and business overview</h2>
+                    <div class="d-flex justify-content-between align-items-center py-3 border-top"><span class="fw-semibold">Customers</span><strong><?= $customersCount ?></strong></div>
+                    <div class="d-flex justify-content-between align-items-center py-3 border-top"><span class="fw-semibold">Employees</span><strong><?= $employeesCount ?></strong></div>
+                    <div class="d-flex justify-content-between align-items-center py-3 border-top"><span class="fw-semibold">Completed services</span><strong><?= $statusCounts['completed'] ?></strong></div>
+                    <div class="d-flex justify-content-between align-items-center py-3 border-top"><span class="fw-semibold">Collected revenue</span><strong>R <?= number_format($revenue, 2) ?></strong></div>
+                    <div class="d-flex justify-content-between align-items-center py-3 border-top border-bottom"><span class="fw-semibold">Pending payments</span><strong>R <?= number_format($pendingPayments, 2) ?></strong></div>
+                    <div class="small text-muted mt-3">Revenue and payment figures are view-only. Finance remains responsible for confirming receipts.</div>
                 </div>
             </div>
-            <div class="col-md-4">
-                <div class="stat-card h-100">
-                    <div class="stat-header">
-                        <div>
-                            <p class="stat-label">Completed</p>
-                        </div>
-                        <div class="icon-box" style="background: rgba(22,163,74,0.10);">✅</div>
-                    </div>
-                    <p class="metric-value"><?= $statusCounts['completed'] ?></p>
-                    <div class="metric-trend">Jobs finished</div>
-                </div>
+        </div>
+
+        <div class="panel-card mb-4">
+            <div class="eyebrow mb-1">Additional controls</div>
+            <h2 class="card-title mb-3">Operational tracking status</h2>
+            <div class="row g-3">
+                <div class="col-md-4"><div class="border rounded-3 p-3 h-100"><strong>Cleaning materials and equipment</strong><div class="small text-muted mt-1">On-hand quantities and reorder levels are available in operations.</div><a class="btn btn-sm btn-outline-primary mt-3" href="manager/operations.php#inventory">Open inventory</a></div></div>
+                <div class="col-md-4"><div class="border rounded-3 p-3 h-100"><strong>Attendance and performance</strong><div class="small text-muted mt-1">Daily attendance records and completed-job totals are available in operations.</div><a class="btn btn-sm btn-outline-primary mt-3" href="manager/operations.php#attendance">Open attendance</a></div></div>
+                <div class="col-md-4"><div class="border rounded-3 p-3 h-100"><strong>Services and prices</strong><div class="small text-muted mt-1">Update service rates, expected duration and cleaner requirements.</div><a class="btn btn-sm btn-outline-primary mt-3" href="manager/operations.php#services">Manage services</a></div></div>
             </div>
         </div>
         <?php elseif ($isFinance): ?>
@@ -787,7 +782,23 @@ if ($servicesStmt) {
                             <h2 class="card-title mb-0">Finance Department</h2>
                         </div>
                     </div>
-
+                    <p class="subtle mb-4">Payment review and transaction tracking for CleanManage.</p>
+                    <div class="d-flex justify-content-between align-items-center py-3 border-top">
+                        <span class="fw-semibold">Payments awaiting verification</span>
+                        <span class="badge rounded-pill text-bg-warning"><?= $pendingPaymentsCount ?></span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center py-3 border-top">
+                        <span class="fw-semibold">Amount awaiting verification</span>
+                        <span class="fw-bold">R <?= number_format($pendingPayments, 2) ?></span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center py-3 border-top border-bottom">
+                        <span class="fw-semibold">Payment records</span>
+                        <span class="fw-bold"><?= $paymentsCount ?></span>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mt-4">
+                        <a href="payments/list.php" class="btn btn-primary">Review payments</a>
+                        <a href="finance/index.php" class="btn btn-outline-primary">Open finance dashboard</a>
+                    </div>
                 </div>
             </div>
 

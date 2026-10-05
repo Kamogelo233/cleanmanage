@@ -110,8 +110,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectCustomerAccount('new-booking');
         }
 
-        $insertBooking = $conn->prepare('INSERT INTO bookings (customer_id, employee_id, service_id, service_type, scheduled_date, status, notes) VALUES (?, NULL, ?, ?, ?, "pending", ?)');
-        $insertBooking->bind_param('iisss', $customerId, $serviceId, $service['service_name'], $scheduledDate, $notes);
+        $servicePriceStmt = $conn->prepare('SELECT price FROM services WHERE id = ? LIMIT 1');
+        $servicePriceStmt->bind_param('i', $serviceId);
+        $servicePriceStmt->execute();
+        $servicePrice = (float)$servicePriceStmt->get_result()->fetch_assoc()['price'];
+        $servicePriceStmt->close();
+
+        $insertBooking = $conn->prepare('INSERT INTO bookings (customer_id, employee_id, service_id, service_type, service_price, scheduled_date, status, notes) VALUES (?, NULL, ?, ?, ?, ?, "pending", ?)');
+        $insertBooking->bind_param('iisdss', $customerId, $serviceId, $service['service_name'], $servicePrice, $scheduledDate, $notes);
         $insertBooking->execute();
         $insertBooking->close();
         setFlash('success', 'Your booking request has been sent. The company will confirm the assignment.');
@@ -130,7 +136,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectCustomerAccount('payments');
         }
 
-        $balanceStmt = $conn->prepare('SELECT COALESCE(s.price, (SELECT legacy_service.price FROM services legacy_service WHERE legacy_service.service_name = b.service_type LIMIT 1), 0) AS price, COALESCE(SUM(CASE WHEN p.status IN ("paid", "pending") THEN p.amount ELSE 0 END), 0) AS submitted FROM bookings b LEFT JOIN services s ON s.id = b.service_id LEFT JOIN payments p ON p.booking_id = b.id WHERE b.id = ? AND b.customer_id = ? GROUP BY b.id, s.price');
+        $balanceStmt = $conn->prepare('SELECT COALESCE(b.service_price, s.price, (SELECT legacy_service.price FROM services legacy_service WHERE legacy_service.service_name = b.service_type LIMIT 1), 0) AS price, COALESCE(SUM(CASE WHEN p.status IN ("paid", "pending") THEN p.amount ELSE 0 END), 0) AS submitted FROM bookings b LEFT JOIN services s ON s.id = b.service_id LEFT JOIN payments p ON p.booking_id = b.id WHERE b.id = ? AND b.customer_id = ? GROUP BY b.id, b.service_price, s.price');
         if (!$balanceStmt) {
             setFlash('danger', 'We could not check the booking balance. Please contact the company.');
             redirectCustomerAccount('payments');
@@ -207,7 +213,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $servicesResult = $conn->query('SELECT id, service_name, price, duration_hours FROM services ORDER BY service_name ASC');
 $services = $servicesResult ? $servicesResult->fetch_all(MYSQLI_ASSOC) : [];
-$bookingStmt = $conn->prepare('SELECT b.*, COALESCE(s.service_name, b.service_type, "Cleaning Service") AS service_name, COALESCE(s.price, (SELECT legacy_service.price FROM services legacy_service WHERE legacy_service.service_name = b.service_type LIMIT 1), 0) AS service_price, e.name AS cleaner_name, COALESCE(SUM(CASE WHEN p.status = "paid" THEN p.amount ELSE 0 END), 0) AS paid_amount, COALESCE(SUM(CASE WHEN p.status = "pending" THEN p.amount ELSE 0 END), 0) AS pending_amount FROM bookings b LEFT JOIN services s ON s.id = b.service_id LEFT JOIN employees e ON FIND_IN_SET(e.id, b.employee_id) > 0 LEFT JOIN payments p ON p.booking_id = b.id WHERE b.customer_id = ? GROUP BY b.id ORDER BY b.scheduled_date DESC, b.id DESC');
+$bookingStmt = $conn->prepare('SELECT b.*, COALESCE(s.service_name, b.service_type, "Cleaning Service") AS service_name, COALESCE(b.service_price, s.price, (SELECT legacy_service.price FROM services legacy_service WHERE legacy_service.service_name = b.service_type LIMIT 1), 0) AS service_price, e.name AS cleaner_name, COALESCE(SUM(CASE WHEN p.status = "paid" THEN p.amount ELSE 0 END), 0) AS paid_amount, COALESCE(SUM(CASE WHEN p.status = "pending" THEN p.amount ELSE 0 END), 0) AS pending_amount FROM bookings b LEFT JOIN services s ON s.id = b.service_id LEFT JOIN employees e ON FIND_IN_SET(e.id, b.employee_id) > 0 AND LOWER(TRIM(e.role)) IN ("cleaner", "employee", "staff") LEFT JOIN payments p ON p.booking_id = b.id WHERE b.customer_id = ? GROUP BY b.id, b.service_price, s.price ORDER BY b.scheduled_date DESC, b.id DESC');
 $bookingStmt->bind_param('i', $customerId);
 $bookingStmt->execute();
 $bookings = $bookingStmt->get_result()->fetch_all(MYSQLI_ASSOC);

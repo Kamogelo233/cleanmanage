@@ -4,9 +4,39 @@ require '../includes/security.php';
 requireAuth();
 
 $role = normalizeUserRole(currentUserRole());
-if (!in_array($role, ['admin', 'owner', 'finance'], true)) {
+$canManagePayments = in_array($role, ['admin', 'owner', 'finance'], true);
+if (!in_array($role, ['admin', 'owner', 'finance', 'manager'], true)) {
     $_SESSION['error'] = 'You do not have permission to access the finance section.';
     header('Location: ../index.php');
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_payment'])) {
+    if (!$canManagePayments) {
+        http_response_code(403);
+        exit('You do not have permission to confirm payments.');
+    }
+
+    if (!verifyCsrfToken($_POST['csrf_token'] ?? null)) {
+        setFlash('danger', 'Your session security check expired. Please try again.');
+    } else {
+        $paymentId = (int)($_POST['payment_id'] ?? 0);
+        $confirmStmt = $conn->prepare('UPDATE payments SET status = "paid" WHERE id = ? AND status = "pending"');
+        if ($confirmStmt && $paymentId > 0) {
+            $confirmStmt->bind_param('i', $paymentId);
+            $confirmStmt->execute();
+            $confirmed = $confirmStmt->affected_rows > 0;
+            $confirmStmt->close();
+            setFlash($confirmed ? 'success' : 'info', $confirmed ? 'Payment confirmed and recorded as paid.' : 'This payment was already confirmed or is no longer pending.');
+        } else {
+            if ($confirmStmt) {
+                $confirmStmt->close();
+            }
+            setFlash('danger', 'The payment could not be confirmed. Please try again.');
+        }
+    }
+
+    header('Location: index.php');
     exit;
 }
 
@@ -59,12 +89,6 @@ foreach ($monthlyRevenue as $entry) {
         .navbar {
             background: linear-gradient(135deg, rgba(22, 55, 37, 0.95), rgba(29, 69, 54, 0.92), rgba(45, 106, 79, 0.95));
             box-shadow: 0 12px 30px rgba(17, 24, 39, 0.14);
-    $role = normalizeUserRole(currentUserRole());
-    if (!in_array($role, ['admin', 'owner', 'finance'], true)) {
-        $_SESSION['error'] = 'You do not have permission to access the finance section.';
-        header('Location: ../index.php');
-        exit;
-    }
         }
 
         .nav-link {
@@ -168,7 +192,7 @@ foreach ($monthlyRevenue as $entry) {
             <div class="navbar-nav ms-auto align-items-lg-center gap-lg-2">
                 <a class="nav-link" href="../index.php">Dashboard</a>
                 <a class="nav-link active" href="index.php">Finance</a>
-                <a class="nav-link" href="../payments/list.php">Payments</a>
+                <?php if ($canManagePayments): ?><a class="nav-link" href="../payments/list.php">Payments</a><?php endif; ?>
                 <a class="nav-link" href="../bookings/list.php">Bookings</a>
                 <a class="btn btn-light btn-sm ms-lg-3" href="../logout.php">Logout</a>
             </div>
@@ -179,8 +203,10 @@ foreach ($monthlyRevenue as $entry) {
         <div class="mb-4">
             <div class="eyebrow">Department</div>
             <h1 class="fw-bold mb-1">Finance Department</h1>
-            <div class="text-muted">Company financial oversight and payment control</div>
+            <div class="text-muted">Company financial oversight and payment control<?= $canManagePayments ? '' : ' · view only' ?></div>
         </div>
+
+        <?php renderFlash(); ?>
 
         <div class="row g-4 mb-4">
             <div class="col-md-3">
@@ -255,8 +281,10 @@ foreach ($monthlyRevenue as $entry) {
                     <div class="eyebrow">Quick actions</div>
                     <h2 class="fw-bold mb-3">Finance tools</h2>
                     <div class="d-grid gap-2">
-                        <a href="../payments/list.php" class="btn btn-primary">Manage Payments</a>
-                        <a href="../payments/add.php" class="btn btn-outline-primary">Add Payment</a>
+                        <?php if ($canManagePayments): ?>
+                            <a href="../payments/list.php" class="btn btn-primary">Manage Payments</a>
+                            <a href="../payments/add.php" class="btn btn-outline-primary">Add Payment</a>
+                        <?php endif; ?>
                         <a href="../bookings/list.php" class="btn btn-outline-primary">Review Bookings</a>
                     </div>
                 </div>
@@ -285,7 +313,7 @@ foreach ($monthlyRevenue as $entry) {
                                     <div class="mt-1 fw-bold">R <?= number_format((float)$payment['amount'], 2) ?></div>
                                     <div class="d-flex justify-content-between align-items-center mt-2">
                                         <span class="badge rounded-pill bg-<?= $payment['status'] === 'paid' ? 'success' : 'warning text-dark' ?>"><?= htmlspecialchars($payment['status']) ?></span>
-                                        <?php if ($payment['status'] === 'pending'): ?>
+                                        <?php if ($canManagePayments && $payment['status'] === 'pending'): ?>
                                             <form method="post" class="m-0">
                                                 <?= csrfField() ?>
                                                 <input type="hidden" name="confirm_payment" value="1">

@@ -18,12 +18,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $selectedEmployeeIds = [];
     }
 
-    // If pending, no employees assigned
-    if ($status === 'pending') {
-        $employeeIdCsv = null;
-    } else {
-        $employeeIdCsv = !empty($selectedEmployeeIds) ? implode(',', $selectedEmployeeIds) : null;
+    if (!empty($selectedEmployeeIds)) {
+        $cleanerIdsResult = $conn->query("SELECT id FROM employees WHERE LOWER(TRIM(role)) IN ('cleaner', 'employee', 'staff')");
+        $cleanerIds = $cleanerIdsResult ? array_map('intval', array_column($cleanerIdsResult->fetch_all(MYSQLI_ASSOC), 'id')) : [];
+        $selectedEmployeeIds = array_values(array_intersect($selectedEmployeeIds, $cleanerIds));
     }
+
+    $employeeIdCsv = !empty($selectedEmployeeIds) ? implode(',', $selectedEmployeeIds) : null;
 
     if ($customerId > 0 && $serviceId > 0) {
         // Get service name for email/whatsapp
@@ -35,13 +36,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $serviceType = $serviceRow['service_name'] ?? 'Cleaning Service';
 
-        $stmt = $conn->prepare('INSERT INTO bookings (customer_id, employee_id, service_id, scheduled_date, status, notes) VALUES (?, ?, ?, ?, ?, ?)');
+        $servicePrice = (float)($serviceRow['price'] ?? 0);
+        $stmt = $conn->prepare('INSERT INTO bookings (customer_id, employee_id, service_id, service_type, service_price, scheduled_date, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         if (!$stmt) {
             die("Prepare failed: " . $conn->error);
         }
 
         // FIXED: i=int, s=string (CSV or null), i=int, s=string, s=string, s=string
-        $stmt->bind_param('isssss', $customerId, $employeeIdCsv, $serviceId, $scheduledDate, $status, $notes);
+        $stmt->bind_param('isisdsss', $customerId, $employeeIdCsv, $serviceId, $serviceType, $servicePrice, $scheduledDate, $status, $notes);
         $stmt->execute();
         $bookingId = $stmt->insert_id;
         $stmt->close();
@@ -77,7 +79,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $customers = $conn->query('SELECT * FROM customers ORDER BY name ASC');
-$employees = $conn->query('SELECT * FROM employees ORDER BY name ASC');
+$employees = $conn->query("SELECT * FROM employees WHERE LOWER(TRIM(role)) IN ('cleaner', 'employee', 'staff') ORDER BY name ASC");
 $servicesResult = $conn->query('SELECT * FROM services ORDER BY price ASC');
 $services = $servicesResult ? $servicesResult->fetch_all(MYSQLI_ASSOC) : [];
 $servicesJson = json_encode($services, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
@@ -183,8 +185,8 @@ $servicesJson = json_encode($services, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_Q
                             <label class="form-label">Employee(s)</label>
                             <div class="border rounded p-3 bg-light">
                                 <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="unassignedEmployee" name="employee_ids[]" value="0" checked>
-                                    <label class="form-check-label" for="unassignedEmployee">Unassigned (Pending only)</label>
+                                    <input class="form-check-input" type="checkbox" id="unassignedEmployee" checked>
+                                    <label class="form-check-label" for="unassignedEmployee">Leave unassigned</label>
                                 </div>
                                 <?php while ($employee = $employees->fetch_assoc()): ?>
                                     <div class="form-check mb-2">
@@ -261,21 +263,21 @@ $servicesJson = json_encode($services, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_Q
             totalAmount.value = formatCurrency(price);
         }
 
-        function updateEmployeeState() {
-            const isPending = statusSelect.value === 'pending';
-            employeeCheckboxes.forEach(checkbox => {
-                checkbox.disabled = isPending;
-                if (isPending) { checkbox.checked = false; }
+        unassignedEmployee.addEventListener('change', () => {
+            if (unassignedEmployee.checked) {
+                employeeCheckboxes.forEach(checkbox => { checkbox.checked = false; });
+            }
+        });
+
+        employeeCheckboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) unassignedEmployee.checked = false;
+                if (!employeeCheckboxes.some(item => item.checked)) unassignedEmployee.checked = true;
             });
-            unassignedEmployee.checked = isPending;
-            unassignedEmployee.disabled = false;
-        }
+        });
 
         serviceSelect.addEventListener('change', updateServiceSummary);
-        statusSelect.addEventListener('change', updateEmployeeState);
-
         updateServiceSummary();
-        updateEmployeeState();
     </script>
 </body>
 </html>

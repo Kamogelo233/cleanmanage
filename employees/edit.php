@@ -1,7 +1,8 @@
 <?php
 require '../includes/db.php';
 require '../includes/security.php';
-requireAdmin();
+requireRole(['admin', 'owner', 'manager']);
+$currentRole = normalizeUserRole(currentUserRole());
 
 $id = (int)($_GET['id'] ?? 0);
 $errors = [];
@@ -10,9 +11,20 @@ if ($id <= 0) {
     redirect('list.php');
 }
 
+$result = $conn->query("SELECT * FROM employees WHERE id = $id LIMIT 1");
+$employee = $result->fetch_assoc();
+if (!$employee) {
+    redirect('list.php');
+}
+
+if ($currentRole === 'manager' && !in_array(strtolower(trim($employee['role'])), ['cleaner', 'employee', 'staff'], true)) {
+    setFlash('danger', 'Managers can only update cleaner records.');
+    redirect('list.php');
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $name = trim($_POST['name'] ?? '');
-    $role = trim($_POST['role'] ?? '');
+    $employeeRole = $currentRole === 'manager' ? 'cleaner' : trim($_POST['role'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     $email = trim($_POST['email'] ?? '');
 
@@ -20,7 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Employee name is required.';
     }
 
-    if ($role === '') {
+    if ($employeeRole === '') {
         $errors[] = 'Employee role is required.';
     }
 
@@ -34,18 +46,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$errors) {
         $stmt = $conn->prepare('UPDATE employees SET name=?, role=?, phone=?, email=? WHERE id=?');
-        $stmt->bind_param('ssssi', $name, $role, $phone, $email, $id);
+        $stmt->bind_param('ssssi', $name, $employeeRole, $phone, $email, $id);
         $stmt->execute();
         $stmt->close();
         redirect('list.php');
     }
 }
 
-$result = $conn->query("SELECT * FROM employees WHERE id = $id LIMIT 1");
-$employee = $result->fetch_assoc();
-
-if (!$employee) {
-    redirect('list.php');
+if ($currentRole === 'manager') {
+    $employee['role'] = 'cleaner';
 }
 ?>
 <!DOCTYPE html>
@@ -100,7 +109,11 @@ if (!$employee) {
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Role</label>
-                            <input type="text" name="role" class="form-control" value="<?= htmlspecialchars($employee['role']) ?>" required>
+                            <?php if ($currentRole === 'manager'): ?>
+                                <input type="text" class="form-control" value="Cleaner" readonly>
+                            <?php else: ?>
+                                <input type="text" name="role" class="form-control" value="<?= htmlspecialchars($employee['role']) ?>" required>
+                            <?php endif; ?>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Phone</label>

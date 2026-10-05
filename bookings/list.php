@@ -34,13 +34,40 @@ if ($canConfirmPayments && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST
 }
 
 if ($canManageBookings && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['status_update'])) {
+    if (!verifyCsrfToken($_POST['csrf_token'] ?? null)) {
+        setFlash('danger', 'Your session security check expired. Please try again.');
+        redirect('list.php');
+    }
+
     $bookingId = (int)$_POST['booking_id'];
     $status = trim($_POST['status'] ?? 'pending');
-    $employeeId = (int)($_POST['employee_id'] ?? 0);
+    $selectedEmployeeIds = $_POST['employee_ids'] ?? [];
+    $validStatuses = ['pending', 'assigned', 'in_progress', 'completed', 'paid'];
 
-    $employeeIdValue = $employeeId > 0 ? (string)$employeeId : null;
+    if (!is_array($selectedEmployeeIds) || !in_array($status, $validStatuses, true)) {
+        setFlash('danger', 'Select a valid booking status and cleaner assignment.');
+        redirect('list.php');
+    }
+
+    $selectedEmployeeIds = array_values(array_unique(array_filter(array_map('intval', $selectedEmployeeIds), static fn ($id) => $id > 0)));
+    if ($selectedEmployeeIds) {
+        $cleanerCheck = $conn->prepare("SELECT id FROM employees WHERE id = ? AND LOWER(TRIM(role)) IN ('cleaner', 'employee', 'staff') LIMIT 1");
+        foreach ($selectedEmployeeIds as $employeeId) {
+            $cleanerCheck->bind_param('i', $employeeId);
+            $cleanerCheck->execute();
+            $isCleaner = (bool)$cleanerCheck->get_result()->fetch_assoc();
+            if (!$isCleaner) {
+                $cleanerCheck->close();
+                setFlash('danger', 'Only cleaners can be assigned to bookings.');
+                redirect('list.php');
+            }
+        }
+        $cleanerCheck->close();
+    }
+
+    $employeeIdCsv = $selectedEmployeeIds ? implode(',', $selectedEmployeeIds) : null;
     $stmt = $conn->prepare('UPDATE bookings SET status=?, employee_id=? WHERE id=?');
-    $stmt->bind_param('ssi', $status, $employeeIdValue, $bookingId);
+    $stmt->bind_param('ssi', $status, $employeeIdCsv, $bookingId);
     $stmt->execute();
     $stmt->close();
 
@@ -67,7 +94,7 @@ if ($canManageBookings && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST[
         }
     }
 
-    setFlash('success', 'Booking status updated and customer notified.');
+    setFlash('success', 'Booking status and cleaner assignment updated.');
     redirect('list.php');
 }
 
@@ -100,8 +127,8 @@ $page = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 10;
 $searchPattern = '%' . $search . '%';
 
-$baseSql = 'SELECT b.*, c.name AS customer_name, c.phone AS customer_phone, e.name AS employee_name, COALESCE(s.service_name, b.service_type, "Cleaning Service") AS service_name, (SELECT p.id FROM payments p WHERE p.booking_id = b.id AND p.status = "pending" ORDER BY p.id DESC LIMIT 1) AS pending_payment_id, (SELECT p.amount FROM payments p WHERE p.booking_id = b.id AND p.status = "pending" ORDER BY p.id DESC LIMIT 1) AS pending_payment_amount, (SELECT p.reference_no FROM payments p WHERE p.booking_id = b.id AND p.status = "pending" ORDER BY p.id DESC LIMIT 1) AS pending_payment_reference FROM bookings b LEFT JOIN customers c ON c.id = b.customer_id LEFT JOIN employees e ON e.id = b.employee_id LEFT JOIN services s ON s.id = b.service_id';
-$countSql = 'SELECT COUNT(*) AS total FROM bookings b LEFT JOIN customers c ON c.id = b.customer_id LEFT JOIN employees e ON e.id = b.employee_id LEFT JOIN services s ON s.id = b.service_id';
+$baseSql = 'SELECT b.*, c.name AS customer_name, c.phone AS customer_phone, (SELECT GROUP_CONCAT(e.name ORDER BY e.name SEPARATOR ", ") FROM employees e WHERE FIND_IN_SET(e.id, b.employee_id) > 0 AND LOWER(TRIM(e.role)) IN ("cleaner", "employee", "staff")) AS employee_name, COALESCE(s.service_name, b.service_type, "Cleaning Service") AS service_name, (SELECT p.id FROM payments p WHERE p.booking_id = b.id AND p.status = "pending" ORDER BY p.id DESC LIMIT 1) AS pending_payment_id, (SELECT p.amount FROM payments p WHERE p.booking_id = b.id AND p.status = "pending" ORDER BY p.id DESC LIMIT 1) AS pending_payment_amount, (SELECT p.reference_no FROM payments p WHERE p.booking_id = b.id AND p.status = "pending" ORDER BY p.id DESC LIMIT 1) AS pending_payment_reference FROM bookings b LEFT JOIN customers c ON c.id = b.customer_id LEFT JOIN services s ON s.id = b.service_id';
+$countSql = 'SELECT COUNT(*) AS total FROM bookings b LEFT JOIN customers c ON c.id = b.customer_id LEFT JOIN services s ON s.id = b.service_id';
 
 $whereClauses = [];
 $params = [];
@@ -114,7 +141,7 @@ if ($role === 'employee') {
 }
 
 if ($search !== '') {
-    $whereClauses[] = '(c.name LIKE ? OR c.phone LIKE ? OR e.name LIKE ? OR s.service_name LIKE ? OR b.service_type LIKE ? OR b.status LIKE ?)';
+    $whereClauses[] = '(c.name LIKE ? OR c.phone LIKE ? OR EXISTS (SELECT 1 FROM employees search_employee WHERE FIND_IN_SET(search_employee.id, b.employee_id) > 0 AND search_employee.name LIKE ?) OR s.service_name LIKE ? OR b.service_type LIKE ? OR b.status LIKE ?)';
     $params[] = $searchPattern;
     $params[] = $searchPattern;
     $params[] = $searchPattern;
@@ -157,7 +184,7 @@ if ($page > $totalPages) {
     $page = $totalPages;
 }
 
-$employeesResult = $conn->query('SELECT * FROM employees ORDER BY name ASC');
+$employeesResult = $conn->query("SELECT * FROM employees WHERE LOWER(TRIM(role)) IN ('cleaner', 'employee', 'staff') ORDER BY name ASC");
 $employees = $employeesResult ? $employeesResult->fetch_all(MYSQLI_ASSOC) : [];
 ?>
 <!DOCTYPE html>
@@ -392,6 +419,7 @@ $employees = $employeesResult ? $employeesResult->fetch_all(MYSQLI_ASSOC) : [];
                                     <?php if ($canManageBookings): ?>
                                         <div class="d-flex flex-column gap-2">
                                             <form method="POST" class="d-flex gap-2 flex-wrap justify-content-end">
+                                                <?= csrfField() ?>
                                                 <input type="hidden" name="status_update" value="1">
                                                 <input type="hidden" name="booking_id" value="<?= $booking['id'] ?>">
                                                 <select name="status" class="form-select form-select-sm" style="width: 140px;">
@@ -401,12 +429,13 @@ $employees = $employeesResult ? $employeesResult->fetch_all(MYSQLI_ASSOC) : [];
                                                     <option value="completed" <?= $status === 'completed' ? 'selected' : '' ?>>Completed</option>
                                                     <option value="paid" <?= $status === 'paid' ? 'selected' : '' ?>>Paid</option>
                                                 </select>
-                                                <select name="employee_id" class="form-select form-select-sm" style="width: 140px;">
-                                                    <option value="0">Unassigned</option>
+                                                    <?php $assignedEmployeeIds = array_map('intval', array_filter(explode(',', (string)($booking['employee_id'] ?? '')))); ?>
+                                                    <div class="w-100 text-end small text-muted">Select cleaner(s), then save. A booking can stay pending while assigned.</div>
+                                                    <div class="d-flex flex-wrap gap-2 justify-content-end">
                                                     <?php foreach ($employees as $employee): ?>
-                                                        <option value="<?= $employee['id'] ?>" <?= (int)$booking['employee_id'] === (int)$employee['id'] ? 'selected' : '' ?>><?= htmlspecialchars($employee['name']) ?></option>
+                                                        <label class="form-check form-check-inline small mb-0"><input class="form-check-input" type="checkbox" name="employee_ids[]" value="<?= (int)$employee['id'] ?>" <?= in_array((int)$employee['id'], $assignedEmployeeIds, true) ? 'checked' : '' ?>> <?= htmlspecialchars($employee['name']) ?></label>
                                                     <?php endforeach; ?>
-                                                </select>
+                                                    </div>
                                                 <button class="btn btn-sm btn-primary" type="submit">Save</button>
                                             </form>
                                             <div class="d-flex gap-2 justify-content-end flex-wrap">

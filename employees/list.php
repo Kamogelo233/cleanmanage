@@ -1,9 +1,10 @@
 <?php
 require '../includes/db.php';
 require '../includes/security.php';
-requireAdmin();
+requireRole(['admin', 'owner', 'manager']);
 
-$role = currentUserRole();
+$role = normalizeUserRole(currentUserRole());
+$canManageEmployees = in_array($role, ['admin', 'owner', 'manager'], true);
 $search = trim($_GET['search'] ?? '');
 $page = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 10;
@@ -29,10 +30,12 @@ if ($role === 'employee') {
     $employees = $listStmt->get_result();
     $listStmt->close();
 } else {
+    $employeeFilter = $role === 'manager' ? " WHERE LOWER(TRIM(role)) IN ('cleaner', 'employee', 'staff')" : '';
     if ($search === '') {
-        $countSql = 'SELECT COUNT(*) AS total FROM employees';
+        $countSql = 'SELECT COUNT(*) AS total FROM employees' . $employeeFilter;
     } else {
-        $countSql = 'SELECT COUNT(*) AS total FROM employees WHERE name LIKE ? OR role LIKE ? OR email LIKE ? OR phone LIKE ?';
+        $searchFilter = '(name LIKE ? OR role LIKE ? OR email LIKE ? OR phone LIKE ?)';
+        $countSql = 'SELECT COUNT(*) AS total FROM employees' . ($role === 'manager' ? " WHERE LOWER(TRIM(role)) IN ('cleaner', 'employee', 'staff') AND " : ' WHERE ') . $searchFilter;
     }
     $countStmt = $conn->prepare($countSql);
     if ($search === '') {
@@ -46,13 +49,13 @@ if ($role === 'employee') {
 
     $offset = ($page - 1) * $perPage;
     if ($search === '') {
-        $listSql = 'SELECT * FROM employees ORDER BY id DESC LIMIT ? OFFSET ?';
+        $listSql = 'SELECT * FROM employees' . $employeeFilter . ' ORDER BY id DESC LIMIT ? OFFSET ?';
         $listStmt = $conn->prepare($listSql);
         $listStmt->bind_param('ii', $perPage, $offset);
     } else {
-        $listSql = 'SELECT * FROM employees WHERE name LIKE ? OR role LIKE ? OR email LIKE ? OR phone LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?';
+        $listSql = 'SELECT * FROM employees' . ($role === 'manager' ? " WHERE LOWER(TRIM(role)) IN ('cleaner', 'employee', 'staff') AND " : ' WHERE ') . '(name LIKE ? OR role LIKE ? OR email LIKE ? OR phone LIKE ?) ORDER BY id DESC LIMIT ? OFFSET ?';
         $listStmt = $conn->prepare($listSql);
-        $listStmt->bind_param('sssssii', $searchPattern, $searchPattern, $searchPattern, $searchPattern, $perPage, $offset);
+        $listStmt->bind_param('ssssii', $searchPattern, $searchPattern, $searchPattern, $searchPattern, $perPage, $offset);
     }
     $listStmt->execute();
     $employees = $listStmt->get_result();
@@ -188,7 +191,7 @@ if ($page > $totalPages) {
                     </ol>
                 </nav>
             </div>
-            <?php if ($role === 'admin'): ?>
+            <?php if ($canManageEmployees): ?>
                 <a href="add.php" class="btn btn-primary">+ Add Employee</a>
             <?php endif; ?>
         </div>
@@ -231,7 +234,7 @@ if ($page > $totalPages) {
                                         <td><?= htmlspecialchars($row['phone'] ?? '-') ?></td>
                                         <td><?= htmlspecialchars($row['email'] ?? '-') ?></td>
                                         <td class="text-end">
-                                            <?php if ($role === 'admin'): ?>
+                                            <?php if ($canManageEmployees): ?>
                                                 <a class="btn btn-sm btn-outline-primary" href="edit.php?id=<?= $row['id'] ?>">Edit</a>
                                             <?php else: ?>
                                                 <span class="text-muted small">Read only</span>

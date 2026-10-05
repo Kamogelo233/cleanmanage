@@ -7,23 +7,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_user'])) {
     requireCsrfToken('users.php');
     $name = trim($_POST['name'] ?? '');
     $email = trim($_POST['email'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
     $password = $_POST['password'] ?? '';
     $role = trim($_POST['role'] ?? 'employee');
 
     $errors = [];
     if ($name === '') $errors[] = 'Name is required.';
     if (!validateEmail($email)) $errors[] = 'Valid email is required.';
-    if (strlen($password) < 6) $errors[] = 'Password must be at least 6 characters.';
+    if (!validatePhone($phone)) $errors[] = 'Valid phone number is required.';
+    if ($passwordErrors = evaluatePasswordStrength($password)) $errors = array_merge($errors, $passwordErrors);
     if (!in_array($role, ['admin', 'owner', 'manager', 'finance', 'cleaner', 'customer'], true)) $errors[] = 'Invalid role selected.';
 
     if (!$errors) {
-        $hash = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $conn->prepare('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)');
-        $stmt->bind_param('ssss', $name, $email, $hash, $role);
-        $stmt->execute();
-        $stmt->close();
-        $_SESSION['success'] = 'User created successfully.';
-        redirect('users.php');
+        $existingStmt = $conn->prepare('SELECT id FROM users WHERE email = ? LIMIT 1');
+        $existingStmt->bind_param('s', $email);
+        $existingStmt->execute();
+        $alreadyExists = (bool)$existingStmt->get_result()->fetch_assoc();
+        $existingStmt->close();
+
+        if ($alreadyExists) {
+            $errors[] = 'A user with this email already exists.';
+        } else {
+            $hash = password_hash($password, PASSWORD_DEFAULT);
+            $conn->begin_transaction();
+            try {
+                $stmt = $conn->prepare('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)');
+                $stmt->bind_param('ssss', $name, $email, $hash, $role);
+                $stmt->execute();
+                $stmt->close();
+
+                if ($role === 'cleaner') {
+                    $employeeStmt = $conn->prepare('SELECT id FROM employees WHERE email = ? LIMIT 1');
+                    $employeeStmt->bind_param('s', $email);
+                    $employeeStmt->execute();
+                    $employee = $employeeStmt->get_result()->fetch_assoc();
+                    $employeeStmt->close();
+
+                    if ($employee) {
+                        $syncStmt = $conn->prepare('UPDATE employees SET name = ?, role = ?, phone = ? WHERE id = ?');
+                        $employeeRole = 'cleaner';
+                        $employeeId = (int)$employee['id'];
+                        $syncStmt->bind_param('sssi', $name, $employeeRole, $phone, $employeeId);
+                    } else {
+                        $syncStmt = $conn->prepare('INSERT INTO employees (name, role, phone, email) VALUES (?, "cleaner", ?, ?)');
+                        $syncStmt->bind_param('sss', $name, $phone, $email);
+                    }
+                    $syncStmt->execute();
+                    $syncStmt->close();
+                } elseif ($role === 'customer') {
+                    $customerStmt = $conn->prepare('SELECT id FROM customers WHERE email = ? LIMIT 1');
+                    $customerStmt->bind_param('s', $email);
+                    $customerStmt->execute();
+                    $customer = $customerStmt->get_result()->fetch_assoc();
+                    $customerStmt->close();
+
+                    if ($customer) {
+                        $syncStmt = $conn->prepare('UPDATE customers SET name = ?, phone = ? WHERE id = ?');
+                        $customerId = (int)$customer['id'];
+                        $syncStmt->bind_param('ssi', $name, $phone, $customerId);
+                    } else {
+                        $syncStmt = $conn->prepare('INSERT INTO customers (name, phone, email) VALUES (?, ?, ?)');
+                        $syncStmt->bind_param('sss', $name, $phone, $email);
+                    }
+                    $syncStmt->execute();
+                    $syncStmt->close();
+                }
+
+                $conn->commit();
+                $_SESSION['success'] = 'User created successfully.';
+                redirect('users.php');
+            } catch (Throwable $error) {
+                $conn->rollback();
+                $errors[] = 'The user could not be created. Check for duplicate employee or customer records and try again.';
+            }
+        }
     }
 }
 
@@ -175,6 +232,10 @@ if ($page > $totalPages) {
                             <div class="mb-3">
                                 <label class="form-label">Email</label>
                                 <input type="email" name="email" class="form-control" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Phone</label>
+                                <input type="text" name="phone" class="form-control" required>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Password</label>
