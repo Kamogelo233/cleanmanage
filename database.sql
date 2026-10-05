@@ -1,0 +1,43 @@
+CREATE DATABASE IF NOT EXISTS cleanmanage_db;
+USE cleanmanage_db;
+
+CREATE TABLE IF NOT EXISTS customers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    phone VARCHAR(30) NOT NULL,
+    email VARCHAR(100) DEFAULT NULL,
+    address TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS employees (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    role VARCHAR(50) NOT NULL,
+    phone VARCHAR(30) DEFAULT NULL,
+    email VARCHAR(100) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bookings (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    customer_id INT NOT NULL,
+    employee_id INT DEFAULT NULL,
+    service_id INT NULL,
+    scheduled_date DATE DEFAULT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'pending',
+    notes TEXT DEFAULT NULL,
+    delivery_confirmed_at DATETIME DEFAULT NULL,
+    feedback_rating TINYINT DEFAULT NULL,
+    feedback_comment TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS payments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    booking_id INT NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    payment_date DATE DEFAULT NULL,
+    method VARCHAR(30) NOT NULL DEFAULT 'cash',
+    status VARCHAR(30) NOT NULL DEFAULT 'pending'
+);
+

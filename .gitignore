@@ -1,0 +1,6 @@
+.env
+.env.*
+/uploads/*
+!/uploads/.gitkeep
+/vendor/
+/node_modules/
